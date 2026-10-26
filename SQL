@@ -1,169 +1,216 @@
 -- Sizwe Coffee SQL Assignment (Databricks SQL)
-
 -- Task 1: Channel performance
 WITH rev AS (
-SELECT o.channel,
-    CASE WHEN o.order_date <= DATE '2024-06-30' THEN 'FY2024' ELSE 'FY2025' END AS fy,
+  SELECT o.channel,CASE
+      WHEN o.order_date <= DATE '2024-06-30' THEN 'FY2024'
+      ELSE 'FY2025'
+    END AS fy,
     SUM(l.line_revenue) AS revenue
-    FROM sales_orders o
-    JOIN sales_lines l ON l.order_id = o.order_id
-    GROUP BY 1, 2
+  FROM sales_orders o
+      JOIN sales_lines l
+        ON l.order_id = o.order_id
+  GROUP BY 1,2
 )
 SELECT channel,
-       SUM(revenue) FILTER (WHERE fy = 'FY2024') AS fy2024_revenue,
-       SUM(revenue) FILTER (WHERE fy = 'FY2025') AS fy2025_revenue,
-       ROUND(100.0 * (SUM(revenue) FILTER (WHERE fy = 'FY2025') - SUM(revenue) FILTER (WHERE fy = 'FY2024')) / SUM(revenue) FILTER (WHERE fy = 'FY2024'), 1) 
-       AS growth_pct
-FROM rev
-    GROUP BY channel
-    ORDER BY channel;
--- Answer: 
--- Subscription: R132.8M -> R144.6M (+8.8%) | Wholesale: R308.2M -> R335.4M (+8.8%)
+  ROUND(SUM(revenue) FILTER ( WHERE fy = 'FY2024' ) / 1000000.0, 1) AS fy2024_revenue_m,
+  ROUND(SUM(revenue) FILTER ( WHERE fy = 'FY2025' ) / 1000000.0, 1) AS fy2025_revenue_m,
+  ROUND(100.0* (SUM(revenue)FILTER ( WHERE fy = 'FY2025' )- SUM(revenue)
+  FILTER ( WHERE fy = 'FY2024' ))/ SUM(revenue)FILTER ( WHERE fy = 'FY2024' ),1) 
+  AS growth_pct
+FROM rev 
+  GROUP BY channel 
+  ORDER BY channel;
+
+-- Answer:
+-- Subscription: R132.8M -> R144.6M (+8.8%)
+--Wholesale: R308.2M -> R335.4M (+8.8%)
 -- Both channels grew ~8.8%; Subscription is ~30% of revenue
 
 -- Task 2: Where the profit actually comes from
-SELECT p.product_line,
-    SUM(l.line_revenue) AS revenue,
-    SUM(l.cogs) AS cost_of_goods,
-    SUM(l.line_revenue) - SUM(l.cogs) AS gross_profit,
-    ROUND(100.0 * (SUM(l.line_revenue) - SUM(l.cogs)) / SUM(l.line_revenue), 1) AS gross_margin_pct
+SELECT
+  p.product_line,
+  ROUND(SUM(l.line_revenue) / 1000000.0, 1) AS revenue_m,
+  ROUND(SUM(l.cogs) / 1000000.0, 1) AS cost_of_goods_m,
+  ROUND((SUM(l.line_revenue) - SUM(l.cogs)) / 1000000.0, 1) AS gross_profit_m,
+  ROUND(100.0 * (SUM(l.line_revenue) - SUM(l.cogs)) / SUM(l.line_revenue), 1) AS gross_margin_pct
 FROM sales_lines l
-    JOIN products p ON p.sku = l.sku
-    GROUP BY p.product_line
-    ORDER BY gross_profit DESC;
+    JOIN products p
+    ON p.sku = l.sku
+GROUP BY p.product_line
+ORDER BY gross_profit_m DESC;
+
 -- Answer:
 -- House Blend is the biggest profit line: R107.1M gross profit on R279.5M revenue (38.3% margin)
 -- Single Origin has the highest margin (44.3%, R75.3M profit); Bulk Commercial is the weakest (19.9% on R271.8M)
 
 -- Task 3: The collections problem
-SELECT c.channel,
-       COUNT(*) AS invoices,
-       COUNT(*) FILTER (WHERE a.settlement_date IS NOT NULL) AS settled,
-       COUNT(*) FILTER (WHERE a.settlement_date IS NULL) AS still_open,
-       ROUND(AVG(DATEDIFF(a.settlement_date, a.invoice_date)), 1) AS avg_days_to_settle,
-       SUM(a.invoice_amount - COALESCE(a.amount_settled, 0)) AS outstanding_value
+SELECT
+  c.channel,
+  COUNT(*) AS invoices,
+  COUNT(*)
+    FILTER ( WHERE a.settlement_date IS NOT NULL ) AS settled,
+  COUNT(*)
+    FILTER ( WHERE a.settlement_date IS NULL ) AS still_open,
+  ROUND(AVG(DATEDIFF(a.settlement_date, a.invoice_date)), 1) AS avg_days_to_settle,
+  ROUND(SUM(a.invoice_amount - COALESCE(a.amount_settled, 0)) / 1000000.0, 2) AS outstanding_value_m
 FROM ar_ledger a
-    JOIN customers c ON c.customer_id = a.customer_id
-    GROUP BY c.channel
-    ORDER BY c.channel;
+    JOIN customers c
+    ON c.customer_id = a.customer_id
+GROUP BY c.channel
+ORDER BY c.channel;
 -- Answer:
 -- Subscription: 19200 invoices, 19156 settled, 44 open, avg 3.8 days, R751k outstanding
 -- Wholesale: 28944 invoices, 25490 settled, 3454 open, avg 68.7 days, R87.8M outstanding
 -- Wholesale is the collections problem: 12% still open and R87.8M tied up vs 0.2% / R0.75M for Subscription
 
 -- Task 4: The ten accounts that matter most
-SELECT c.trading_name, c.segment, c.province, COALESCE(r.rep_name, 'Unassigned') AS sales_rep, 
-    SUM(l.line_revenue) AS fy2025_revenue
-    FROM customers c
-    JOIN sales_orders o ON o.customer_id = c.customer_id
+SELECT
+  c.trading_name,
+  c.segment,
+  c.province,
+  COALESCE(r.rep_name, 'Unassigned') AS sales_rep,
+  ROUND(SUM(l.line_revenue) / 1000000.0, 1) AS fy2025_revenue_m
+FROM customers c
+    JOIN sales_orders o
+    ON o.customer_id = c.customer_id
 AND o.order_date > DATE '2024-06-30'
-    JOIN sales_lines l ON l.order_id = o.order_id
-    LEFT JOIN reps r ON r.rep_id = c.rep_id      
+    JOIN sales_lines l
+    ON l.order_id = o.order_id
+LEFT JOIN reps r
+      ON r.rep_id = c.rep_id
 -- LEFT JOIN keeps customers with no rep
-    GROUP BY c.customer_id, c.trading_name, c.segment, c.province, r.rep_name
-    ORDER BY fy2025_revenue DESC
+GROUP BY
+  c.customer_id,
+  c.trading_name,
+  c.segment,
+  c.province,
+  r.rep_name
+ORDER BY fy2025_revenue_m DESC
 LIMIT 10;
+
 --Answer:
---trading_name	            segment	            province	    sales_rep	    fy2025_revenue
---Halvane Retail Group	    Grocery Chain	    Western Cape	Kagiso Mkhize	R38399999.890000045
---ighveld Deli 85	        Restaurant Group	Free State	    Karabo Mokoena	R3380200.3299999996
---Table Bay Foods 280	    Independent Cafe	KwaZulu-Natal	Karabo van Wyk	R3333678.0000000005
---Umhlanga Fresh 108	    Restaurant Group	Gauteng	        Sipho Steyn	    R3246754.35
---Kalahari Kitchen 42	    Independent Cafe	Gauteng	        Chantal Ismail	R2320923.2500000005
---Ridgeway Foods 308	    Independent Cafe	KwaZulu-Natal	Chantal Adams	R2320555.37
---Boland Bakery 91	        Independent Cafe	Free State	    Karabo Zwane	R2280097.99
---The Daily Grind 219	    Hotel Group	        Western Cape	Nomsa Botha	    R2134607.319999999
---Midrand Market 293	    Independent Cafe	KwaZulu-Natal	Chantal Ismail	R2024456.9800000002
---Bloom Coffee House 275    Hotel Group	        Gauteng	        Karabo Zwane	R1934391.3900000001
+--trading_name	            segment	            province	      sales_rep	      fy2025_revenue
+--Halvane Retail Group	    Grocery Chain	      Western Cape	  Kagiso Mkhize	  R38.4M
+--ighveld Deli 85	          Restaurant Group	  Free State	    Karabo Mokoena	R3.4M
+--Table Bay Foods 280	      Independent Cafe	  KwaZulu-Natal	  Karabo van Wyk	R3.3M
+--Umhlanga Fresh 108	      Restaurant Group	  Gauteng	        Sipho Steyn	    R3.2M
+--Kalahari Kitchen 42	      Independent Cafe	  Gauteng	        Chantal Ismail	R2.3M
+--Ridgeway Foods 308	      Independent Cafe	  KwaZulu-Natal	  Chantal Adams	  R2.3M
+--Boland Bakery 91	        Independent Cafe	  Free State	    Karabo Zwane	  R2.3M
+--The Daily Grind 219	      Hotel Group	        Western Cape	  Nomsa Botha	    R2.1M
+--Midrand Market 293	      Independent Cafe	  KwaZulu-Natal	  Chantal Ismail	R2.0M
+--Bloom Coffee House 275    Hotel Group	        Gauteng	        Karabo Zwane	  R1.9M
 
 -- Top account: Halvane Retail Group (Grocery Chain, Western Cape, Kagiso Mkhize) R38.4M
 -- Runners-up are Independent Cafes / Restaurant Groups in the R1.9M-R3.4M range
 -- One grocery chain alone is >10x the next account - extreme customer concentration
-
 -- Task 5: A commercial gap
-SELECT c.trading_name, c.segment, c.province,
-    SUM(l.line_revenue) AS revenue
-    FROM customers c
-    JOIN sales_orders o ON o.customer_id = c.customer_id
-    JOIN sales_lines l ON l.order_id = o.order_id
-    WHERE c.channel = 'Wholesale'
-AND NOT EXISTS (SELECT 1 FROM trade_promotions t WHERE t.customer_id = c.customer_id)
-    GROUP BY c.customer_id, c.trading_name, c.segment, c.province
-    ORDER BY revenue DESC
+SELECT
+  c.trading_name,
+  c.segment,
+  c.province,
+  ROUND(SUM(l.line_revenue) / 1000000.0, 1) AS revenue_m
+FROM customers c
+    JOIN sales_orders o
+ON o.customer_id = c.customer_id
+    JOIN sales_lines l
+ON l.order_id = o.order_id
+WHERE c.channel = 'Wholesale' AND NOT EXISTS
+ (SELECT 1 FROM trade_promotions t WHERE t.customer_id = c.customer_id)
+GROUP BY
+  c.customer_id,
+  c.trading_name,
+  c.segment,
+  c.province
+ORDER BY revenue_m DESC
 LIMIT 15;
--- Answer:
---trading_name	        segment	            provincE        revenue
---Umhlanga Fresh 108	    Restaurant Group	Gauteng	        R6224772.370000002
---Ridgeway Foods 308	    Independent Cafe	KwaZulu-Natal	R4448744.719999999
---Kalahari Kitchen 42	    Independent Cafe	Gauteng	        R4447225.010000003
---TOP 3
---Midrand Market 293	    Independent Cafe	KwaZulu-Natal	R3887087.18
---Bloom Coffee House 275	Hotel Group	        Gauteng	        R3719361.4600000014
---Corner Perk 34	        Independent Cafe	Limpopo	        R3431735.390000001
---Highveld Deli 28	    Independent Cafe	Gauteng	        R3421285.019999999
---Bloom Coffee House 306	Restaurant Group	Gauteng	        R3397003.31
---Kalahari Kitchen 348	Independent Cafe	KwaZulu-Natal   R3270408.0200000014
---Zebra Cafe 201	        Grocery Chain	    Free State	    R3169175.7400000007
---Highveld Deli 305	    Independent Cafe	Free State	    R2712773.5100000007
---Zebra Cafe 337	        Grocery Chain	    Gauteng	        R2587275.23
---Table Bay Foods 291	    Independent Cafe	Gauteng	        R2413619.420000001
---Ridgeway Foods 125	    Restaurant Group	Gauteng	        R2340560.47
---Corner Perk 248	        Hotel Group	        KwaZulu-Natal	R2311270.1399999987
 
+-- Answer:
+--trading_name	          segment	            province        revenue
+--Umhlanga Fresh 108	    Restaurant Group	  Gauteng	        R6.2M
+--Ridgeway Foods 308	    Independent Cafe	  KwaZulu-Natal	  R4.4M
+--Kalahari Kitchen 42	    Independent Cafe	  Gauteng	        R4.4M
+--TOP 3
+--Midrand Market 293	    Independent Cafe	  KwaZulu-Natal	  R3.9M
+--Bloom Coffee House 275	Hotel Group	        Gauteng	        R3.7M
+--Corner Perk 34	        Independent Cafe	  Limpopo	        R3.4M
+--Highveld Deli 28	      Independent Cafe	  Gauteng	        R3.4M
+--Bloom Coffee House 306	Restaurant Group	  Gauteng	        R3.4M
+--Kalahari Kitchen 348	  Independent Cafe	  KwaZulu-Natal   R3.3M
+--Zebra Cafe 201	        Grocery Chain	      Free State	    R3.2M
+--Highveld Deli 305	      Independent Cafe	  Free State	    R2.7M
+--Zebra Cafe 337	        Grocery Chain	      Gauteng	        R2.6M
+--Table Bay Foods 291	    Independent Cafe	  Gauteng	        R2.4M
+--Ridgeway Foods 125	    Restaurant Group	  Gauteng	        R2.3M
+--Corner Perk 248	        Hotel Group	        KwaZulu-Natal	  R2.3M
 -- 15 wholesale accounts with zero trade promotions, led by Umhlanga Fresh 108 (R6.2M)
 -- Mid-market accounts (cafes, restaurants, hotels, R2.3M-R4.4M each) are unsupported by promotions
 -- Total gap ~R45M+ of un-promoted wholesale revenue across these 15 accounts
 
 -- Task 6: Are the sales representatives hitting target?
-WITH rep_rev AS (
-    SELECT o.rep_id, SUM(l.line_revenue) AS fy2025_revenue
-    FROM sales_orders o
-JOIN sales_lines l ON l.order_id = o.order_id
-    WHERE o.order_date > DATE '2024-06-30'
-    GROUP BY o.rep_id
-    )
-SELECT r.rep_name, r.territory, r.target_monthly,
-       ROUND(COALESCE(v.fy2025_revenue, 0) / 12.0, 0) AS fy2025_monthly_avg,
-       ROUND(100.0 * COALESCE(v.fy2025_revenue, 0) / 12.0 / r.target_monthly, 1) AS pct_of_target
-    FROM reps r
-    LEFT JOIN rep_rev v ON v.rep_id = r.rep_id      
-    ORDER BY pct_of_target DESC;
+WITH rep_rev AS 
+(SELECT o.rep_id,
+SUM(l.line_revenue) AS fy2025_revenue
+  FROM sales_orders o
+      JOIN sales_lines l
+ON l.order_id = o.order_id
+  WHERE o.order_date > DATE '2024-06-30'
+  GROUP BY o.rep_id)
+SELECT
+  r.rep_name,
+  r.territory,
+  ROUND(r.target_monthly / 1000000.0, 1) AS target_monthly_m,
+  ROUND(COALESCE(v.fy2025_revenue, 0) / 12.0 / 1000000.0, 2) AS fy2025_monthly_avg_m,
+  ROUND(100.0 * COALESCE(v.fy2025_revenue, 0) / 12.0 / r.target_monthly, 1) AS pct_of_target
+FROM reps r
+    LEFT JOIN rep_rev v
+ON v.rep_id = r.rep_id
+ORDER BY pct_of_target DESC;
+
 -- Answer:
 -- 16 of 18 reps are at or above target; best is Karabo van Wyk at 250.3%, worst is Johan Naidoo at 77.6%
 -- Sipho Steyn (98.0%) is the only other rep below target; top performers exceed target by 2x+, so targets look stale
 
 -- Task 7: The shape of the year
-WITH monthly AS (
-    SELECT CAST(DATE_TRUNC('month', o.order_date) AS DATE) AS month,
-           SUM(l.line_revenue) AS revenue
-    FROM sales_orders o
-    JOIN sales_lines l ON l.order_id = o.order_id
-    GROUP BY 1
-)
-SELECT month, revenue,
-       ROUND(100.0 * (revenue - LAG(revenue) OVER (ORDER BY month)) / LAG(revenue) OVER (ORDER BY month), 1) AS mom_change_pct,
-       ROUND(AVG(revenue) OVER (ORDER BY month 
-       ROWS BETWEEN 2 PRECEDING AND CURRENT ROW), 0) AS rolling_3m_avg
+WITH monthly AS 
+(SELECT CAST(DATE_TRUNC('month', o.order_date) AS DATE) AS month,
+    SUM(l.line_revenue) AS revenue
+  FROM sales_orders o
+      JOIN sales_lines l
+ON l.order_id = o.order_id
+  GROUP BY 1)
+SELECT month,
+  ROUND(revenue / 1000000.0, 1) AS revenue_m,
+  ROUND(
+    100.0 * (revenue - LAG(revenue) OVER (ORDER BY month)) / LAG(revenue) OVER (ORDER BY month),
+    1) 
+AS mom_change_pct,
+  ROUND(AVG(revenue) OVER (ORDER BY month ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) / 1000000.0,1) 
+  AS rolling_3m_avg_m
 FROM monthly
 ORDER BY month;
--- Answer: seasonal pattern repeats in both years with revenue falling from july to a low in december, then recovering through to june.
 
+-- Answer: seasonal pattern repeats in both years with revenue falling from july to a low in december, then recovering through to june.
 -- Task 8: Why has the margin moved?
-WITH pl AS (
-    SELECT CASE WHEN o.order_date <= DATE '2024-06-30' THEN 'FY2024' ELSE 'FY2025' END AS fy,
-           p.product_line,
-           SUM(l.line_revenue)  AS revenue,
-           SUM(l.cogs) AS cogs
-    FROM sales_orders o
-    JOIN sales_lines l ON l.order_id = o.order_id
-    JOIN products p ON p.sku = l.sku
-    GROUP BY 1, 2
-)
-SELECT fy, product_line, revenue,
-       ROUND(100.0 * (revenue - cogs) / revenue, 1) AS gross_margin_pct,
-       ROUND(100.0 * revenue / SUM(revenue) OVER (PARTITION BY fy), 1) AS revenue_share_pct
+WITH pl AS (SELECT CASE
+  WHEN o.order_date <= DATE '2024-06-30' THEN 'FY2024'
+    ELSE 'FY2025'
+  END AS fy,
+    p.product_line,
+    SUM(l.line_revenue) AS revenue,
+    SUM(l.cogs) AS cogs
+  FROM sales_orders o
+      JOIN sales_lines l
+    ON l.order_id = o.order_id
+      JOIN products p
+    ON p.sku = l.sku
+  GROUP BY 1, 2)
+SELECT fy,product_line,
+  ROUND(revenue / 1000000.0, 1) AS revenue_m,
+  ROUND(100.0 * (revenue - cogs) / revenue, 1) AS gross_margin_pct,
+  ROUND(100.0 * revenue / SUM(revenue) OVER (PARTITION BY fy), 1) AS revenue_share_pct
 FROM pl
-ORDER BY product_line, fy;
+ORDER BY product_line,fy;
 -- Answer: mix shift, not within-line margin change
 -- Within-line margins are flat FY2024->FY2025 (Bulk Commercial 19.9%->19.9%, Single Origin 44.2->44.3%)
 -- Low-margin Bulk Commercial (19.9%) grew revenue share 25.0%->33.6% while House Blend fell 32.1->28.7%
